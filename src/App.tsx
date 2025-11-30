@@ -117,6 +117,14 @@ function AppContent() {
                   <p className="text-gray-600">Loading products...</p>
                 </div>
               </div>
+            ) : products.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16">
+                <div className="text-6xl mb-4">📦</div>
+                <h3 className="text-xl font-semibold text-gray-800 mb-2">No products available</h3>
+                <p className="text-gray-500 text-center max-w-md">
+                  There are no products in the catalog yet. Check back soon or contact the administrator.
+                </p>
+              </div>
             ) : (
               <ProductGrid products={products} onProductClick={handleProductClick} />
             )}

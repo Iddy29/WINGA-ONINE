@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Product, FilterOptions } from '../types';
 import { fetchProductsFromFirestore } from '../services/products';
+import { collection, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase/client';
 
 export const useProducts = () => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -14,40 +16,112 @@ export const useProducts = () => {
   const [sortBy, setSortBy] = useState<'name' | 'price' | 'rating'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [allProducts, setAllProducts] = useState<Product[]>([]);
 
   useEffect(() => {
     let mounted = true;
+    let unsubscribe: (() => void) | null = null;
+
+    // Initial load
     const load = async () => {
       setLoading(true);
+      setError(null);
       try {
         const remote = await fetchProductsFromFirestore();
         if (mounted) {
           setAllProducts(remote);
+          setLoading(false);
         }
-      } catch (e) {
+      } catch (e: any) {
         console.error('Error loading products:', e);
         if (mounted) {
+          setError(e.message || 'Failed to load products');
           setAllProducts([]);
-        }
-      } finally {
-        if (mounted) {
           setLoading(false);
         }
       }
     };
-    load();
-    return () => { mounted = false; };
+
+    // Set up real-time listener for product updates
+    try {
+      // Use simple collection query - we sort client-side anyway
+      const productsCollection = collection(db, 'products');
+      
+      unsubscribe = onSnapshot(
+        productsCollection,
+        (snapshot) => {
+          if (!mounted) return;
+          
+          const products: Product[] = [];
+          snapshot.docs.forEach(doc => {
+            const data = doc.data();
+            try {
+              const product: Product = {
+                id: doc.id,
+                name: data.name || 'Unnamed Product',
+                price: Number(data.price) || 0,
+                image: data.image || '',
+                images: Array.isArray(data.images) ? data.images : [],
+                category: data.category || '',
+                description: data.description || '',
+                rating: Number(data.rating) || 0,
+                reviews: Number(data.reviews) || 0,
+                inStock: Boolean(data.inStock !== false),
+                features: Array.isArray(data.features) ? data.features : [],
+                brand: data.brand || '',
+                ...(data.originalPrice && { originalPrice: Number(data.originalPrice) }),
+                ...(data.discount && typeof data.discount === 'object' && { discount: data.discount })
+              };
+              
+              if (product.name && product.price > 0 && product.image) {
+                products.push(product);
+              }
+            } catch (error) {
+              console.error(`Error parsing product ${doc.id}:`, error);
+            }
+          });
+          
+          setAllProducts(products);
+          setLoading(false);
+          setError(null);
+        },
+        (error) => {
+          console.error('Error in products snapshot:', error);
+          if (mounted) {
+            setError(error.message || 'Failed to sync products');
+            // Fallback to initial load
+            load();
+          }
+        }
+      );
+    } catch (e) {
+      console.error('Error setting up products listener:', e);
+      // Fallback to initial load
+      load();
+    }
+
+    return () => {
+      mounted = false;
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
   }, []);
 
   const filteredProducts = useMemo(() => {
     let filtered = allProducts.filter(product => {
-      // Search query
-      if (searchQuery && !product.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
-          !product.brand.toLowerCase().includes(searchQuery.toLowerCase()) &&
-          !product.description.toLowerCase().includes(searchQuery.toLowerCase())) {
-        return false;
+      // Search query - handle empty/null values
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const nameMatch = product.name?.toLowerCase().includes(query) || false;
+        const brandMatch = product.brand?.toLowerCase().includes(query) || false;
+        const descMatch = product.description?.toLowerCase().includes(query) || false;
+        
+        if (!nameMatch && !brandMatch && !descMatch) {
+          return false;
+        }
       }
 
       // Category filter
@@ -56,17 +130,19 @@ export const useProducts = () => {
       }
 
       // Price range filter
-      if (product.price < filters.priceRange[0] || product.price > filters.priceRange[1]) {
+      const price = Number(product.price) || 0;
+      if (price < filters.priceRange[0] || price > filters.priceRange[1]) {
         return false;
       }
 
       // Brand filter
-      if (filters.brand.length > 0 && !filters.brand.includes(product.brand)) {
+      if (filters.brand.length > 0 && product.brand && !filters.brand.includes(product.brand)) {
         return false;
       }
 
       // Rating filter
-      if (filters.rating > 0 && product.rating < filters.rating) {
+      const rating = Number(product.rating) || 0;
+      if (filters.rating > 0 && rating < filters.rating) {
         return false;
       }
 
@@ -84,13 +160,13 @@ export const useProducts = () => {
       
       switch (sortBy) {
         case 'name':
-          comparison = a.name.localeCompare(b.name);
+          comparison = (a.name || '').localeCompare(b.name || '');
           break;
         case 'price':
-          comparison = a.price - b.price;
+          comparison = (Number(a.price) || 0) - (Number(b.price) || 0);
           break;
         case 'rating':
-          comparison = a.rating - b.rating;
+          comparison = (Number(a.rating) || 0) - (Number(b.rating) || 0);
           break;
       }
 
@@ -98,11 +174,12 @@ export const useProducts = () => {
     });
 
     return filtered;
-  }, [searchQuery, filters, sortBy, sortOrder]);
+  }, [allProducts, searchQuery, filters, sortBy, sortOrder]);
 
   return {
     products: filteredProducts,
     loading,
+    error,
     searchQuery,
     setSearchQuery,
     filters,

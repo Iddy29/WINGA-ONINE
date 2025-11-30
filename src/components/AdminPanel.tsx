@@ -160,26 +160,60 @@ export const AdminPanel: React.FC = () => {
   const handleProductSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Ensure main image is set
-    if (!productForm.image) {
+    // Validate required fields
+    if (!productForm.name || !productForm.name.trim()) {
+      showToast('Product name is required', 'error');
+      return;
+    }
+
+    if (!productForm.image || !productForm.image.trim()) {
       showToast('Please provide a main image URL', 'error');
       return;
     }
 
+    if (!productForm.price || productForm.price <= 0) {
+      showToast('Product price must be greater than 0', 'error');
+      return;
+    }
+
+    if (!productForm.category || !productForm.category.trim()) {
+      showToast('Please select a category', 'error');
+      return;
+    }
+
     try {
+      // Prepare product data with proper types
+      const productData: Omit<Product, 'id'> = {
+        name: productForm.name.trim(),
+        price: Number(productForm.price),
+        image: productForm.image.trim(),
+        images: Array.isArray(productForm.images) ? productForm.images.filter(img => img && img.trim()) : [],
+        category: productForm.category.trim(),
+        description: productForm.description?.trim() || '',
+        rating: Number(productForm.rating) || 0,
+        reviews: Number(productForm.reviews) || 0,
+        inStock: Boolean(productForm.inStock),
+        features: Array.isArray(productForm.features) ? productForm.features.filter(f => f && f.trim()) : [],
+        brand: productForm.brand?.trim() || '',
+        originalPrice: productForm.originalPrice ? Number(productForm.originalPrice) : undefined,
+        discount: productForm.discount && typeof productForm.discount === 'object' ? productForm.discount : undefined
+      };
+
       if (editingProductId) {
-        await updateProduct(editingProductId, productForm);
+        await updateProduct(editingProductId, productData);
         showToast('Product updated successfully', 'success');
       } else {
-        await createProduct(productForm);
+        await createProduct(productData);
         showToast('Product created successfully', 'success');
       }
       resetProductForm();
       const productsData = await fetchProductsFromFirestore();
       setProducts(productsData);
       await loadCategoriesWithCounts(productsData);
-    } catch (error) {
-      showToast('Failed to save product', 'error');
+    } catch (error: any) {
+      console.error('Error saving product:', error);
+      const errorMessage = error?.message || error?.code || 'Unknown error';
+      showToast(`Failed to save product: ${errorMessage}`, 'error');
     }
   };
 
